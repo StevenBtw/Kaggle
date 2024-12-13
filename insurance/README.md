@@ -57,8 +57,9 @@ python -m insurance.main
 
 ## Performance
 
-Current best score: TBD
-Public Leaderboard Position: TBD
+Current best score: 1.04463
+
+Public Leaderboard Position: 132
 
 ## Requirements
 
