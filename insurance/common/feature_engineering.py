@@ -5,9 +5,27 @@ from sklearn.preprocessing import LabelEncoder, PolynomialFeatures
 from sklearn.cluster import KMeans
 from sklearn.impute import SimpleImputer
 from itertools import combinations_with_replacement
+import hashlib
+import joblib
+
+def compute_input_hash(train_data, test_data):
+    """Compute a hash of the input data to detect changes."""
+    train_hash = str(pd.util.hash_pandas_object(train_data).values.sum())
+    test_hash = str(pd.util.hash_pandas_object(test_data).values.sum())
+    data_str = train_hash + test_hash
+    return hashlib.md5(data_str.encode()).hexdigest()
+
+def load_cached_features(data_hash):
+    """Load cached feature sets if they exist."""
+    cache_path = f'insurance/output/features/feature_sets_{data_hash}.joblib'
+    if os.path.exists(cache_path):
+        print("\nLoading cached feature sets...")
+        return joblib.load(cache_path)
+    return None
 
 def save_features(features, name, subset='train'):
     """Save features to disk."""
+    os.makedirs('insurance/output/features', exist_ok=True)
     path = f'insurance/output/features/{name}_{subset}.parquet'
     features.to_parquet(path)
 
@@ -17,6 +35,40 @@ def load_features(name, subset='train'):
     if os.path.exists(path):
         return pd.read_parquet(path)
     return None
+
+def save_model_predictions(predictions, model_name, data_hash, fold=None):
+    """Save model predictions to disk."""
+    os.makedirs('insurance/output/models', exist_ok=True)
+    if fold is not None:
+        path = f'insurance/output/models/{model_name}_fold{fold}_{data_hash}.joblib'
+    else:
+        path = f'insurance/output/models/{model_name}_{data_hash}.joblib'
+    joblib.dump(predictions, path)
+
+def load_model_predictions(model_name, data_hash, fold=None):
+    """Load model predictions from disk if they exist."""
+    if fold is not None:
+        path = f'insurance/output/models/{model_name}_fold{fold}_{data_hash}.joblib'
+    else:
+        path = f'insurance/output/models/{model_name}_{data_hash}.joblib'
+    
+    if os.path.exists(path):
+        try:
+            predictions = joblib.load(path)
+            # Check if predictions have version information
+            if 'version' not in predictions:
+                return None
+            return predictions
+        except (OSError, EOFError):
+            # If there's an error loading the file, return None
+            return None
+    return None
+
+def save_feature_sets(feature_sets, data_hash):
+    """Save feature sets to cache."""
+    os.makedirs('insurance/output/features', exist_ok=True)
+    cache_path = f'insurance/output/features/feature_sets_{data_hash}.joblib'
+    joblib.dump(feature_sets, cache_path)
 
 def create_or_load_features(name, create_fn, *args, **kwargs):
     """Create features or load from disk if they exist."""
@@ -174,17 +226,19 @@ def create_polynomial_features(df_train, df_test, features, degree=3, handle_nan
     imputer = SimpleImputer(strategy='median') if not handle_nan else None
     
     def process_df(df, fit=True):
+        data = df[features].copy()  # Create a copy to avoid modifying original
+        
         if not handle_nan:
             # Fill missing values for models that can't handle them
             if fit:
-                data = imputer.fit_transform(df[features])
+                data = pd.DataFrame(imputer.fit_transform(data), columns=features)
             else:
-                data = imputer.transform(df[features])
+                data = pd.DataFrame(imputer.transform(data), columns=features)
         else:
             # For models that can handle NaN, we still need to fill NaN for polynomial features
             # but we'll mark the locations to restore them later
-            mask = df[features].isna()
-            data = df[features].fillna(df[features].median())
+            mask = data.isna()
+            data = data.fillna(data.median())
         
         if fit:
             poly_features = poly.fit_transform(data)
@@ -208,6 +262,17 @@ def create_polynomial_features(df_train, df_test, features, degree=3, handle_nan
 
 def engineer_features(train_data, test_data):
     """Engineer features for model training."""
+    # Compute hash of input data
+    data_hash = compute_input_hash(train_data, test_data)
+    print(f"\nInput data hash: {data_hash}")
+    
+    # Try to load cached feature sets
+    cached = load_cached_features(data_hash)
+    if cached is not None:
+        print("Using cached feature sets")
+        return cached
+    
+    print("\nEngineering features...")
     
     # List of features
     numerical_features = [
@@ -327,5 +392,11 @@ def engineer_features(train_data, test_data):
     X_complete = train_complete.drop('Premium Amount', axis=1)
     y = train['Premium Amount']
     
-    return (X_nan, X_complete, y, test_nan, test_complete, 
-            numerical_features_nan, numerical_features_complete, categorical_features)
+    # Create feature sets tuple
+    feature_sets = (X_nan, X_complete, y, test_nan, test_complete, 
+                   numerical_features_nan, numerical_features_complete, categorical_features)
+    
+    # Cache the feature sets
+    save_feature_sets(feature_sets, data_hash)
+    
+    return feature_sets

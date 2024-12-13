@@ -1,5 +1,8 @@
 from sklearn.ensemble import HistGradientBoostingRegressor, ExtraTreesRegressor
 
+# Model version - increment when changing model architecture or hyperparameters
+MODEL_VERSION = "1.0"
+
 def create_hist_gradient_models():
     """Create HistGradientBoosting models with different hyperparameters."""
     models = []

@@ -3,15 +3,31 @@ from ngboost import NGBRegressor
 from ngboost.learners import default_tree_learner
 from ngboost.distns import Normal
 import torch
+import warnings
+
+# Model version - increment when changing model architecture or hyperparameters
+MODEL_VERSION = "1.0"
 
 def create_tabnet_models(n_gpu_threads=4):
     """Create TabNet models with different hyperparameters."""
+    # Suppress device warning
+    warnings.filterwarnings('ignore', message='Device used*')
+    
+    # Check if CUDA is available and properly configured
     if torch.cuda.is_available():
-        device = 'cuda'
-        torch.cuda.set_device(0)
-        torch.cuda.set_per_process_memory_fraction(0.7)  # Prevent OOM
+        try:
+            # Test CUDA device
+            torch.cuda.set_device(0)
+            torch.cuda.get_device_name(0)
+            device = 'cuda'
+            torch.cuda.set_per_process_memory_fraction(0.7)  # Prevent OOM
+        except Exception as e:
+            print(f"CUDA initialization failed, falling back to CPU: {str(e)}")
+            device = 'cpu'
     else:
         device = 'cpu'
+    
+    print(f"Using device: {device} for TabNet")
     
     models = []
     
@@ -34,7 +50,8 @@ def create_tabnet_models(n_gpu_threads=4):
         ),
         scheduler_fn=torch.optim.lr_scheduler.ReduceLROnPlateau,
         mask_type='entmax',  # "sparsemax" or "entmax"
-        device_name=device
+        device_name=device,
+        verbose=True
     ))
     
     # Deeper model
@@ -56,7 +73,8 @@ def create_tabnet_models(n_gpu_threads=4):
         ),
         scheduler_fn=torch.optim.lr_scheduler.ReduceLROnPlateau,
         mask_type='entmax',
-        device_name=device
+        device_name=device,
+        verbose=True
     ))
     
     return models
@@ -71,7 +89,7 @@ def create_ngboost_models():
         learning_rate=0.05,
         natural_gradient=True,
         verbose=True,
-        Base=default_tree_learner,  # Already a configured base learner
+        Base=default_tree_learner,
         Dist=Normal,
         random_state=42
     ))
@@ -82,7 +100,7 @@ def create_ngboost_models():
         learning_rate=0.03,
         natural_gradient=True,
         verbose=True,
-        Base=default_tree_learner,  # Already a configured base learner
+        Base=default_tree_learner,
         Dist=Normal,
         random_state=43
     ))
@@ -93,7 +111,7 @@ def create_ngboost_models():
         learning_rate=0.05,
         natural_gradient=True,
         verbose=True,
-        Base=default_tree_learner,  # Already a configured base learner
+        Base=default_tree_learner,
         Dist=Normal,
         random_state=44
     ))
