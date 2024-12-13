@@ -1,5 +1,8 @@
 from catboost import CatBoostRegressor
 
+# Model version - increment when changing model architecture or hyperparameters
+MODEL_VERSION = "1.0"
+
 def create_catboost_models(n_gpu_threads=4):
     """Create CatBoost models with different hyperparameters."""
     models = []

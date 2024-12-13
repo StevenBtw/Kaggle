@@ -4,6 +4,9 @@ from ngboost.learners import default_tree_learner
 from ngboost.distns import Normal
 import torch
 
+# Model version - increment when changing model architecture or hyperparameters
+MODEL_VERSION = "1.0"
+
 def create_tabnet_models(n_gpu_threads=4):
     """Create TabNet models with different hyperparameters."""
     if torch.cuda.is_available():
@@ -71,7 +74,7 @@ def create_ngboost_models():
         learning_rate=0.05,
         natural_gradient=True,
         verbose=True,
-        Base=default_tree_learner,  # Already a configured base learner
+        Base=default_tree_learner,
         Dist=Normal,
         random_state=42
     ))
@@ -82,7 +85,7 @@ def create_ngboost_models():
         learning_rate=0.03,
         natural_gradient=True,
         verbose=True,
-        Base=default_tree_learner,  # Already a configured base learner
+        Base=default_tree_learner,
         Dist=Normal,
         random_state=43
     ))
@@ -93,7 +96,7 @@ def create_ngboost_models():
         learning_rate=0.05,
         natural_gradient=True,
         verbose=True,
-        Base=default_tree_learner,  # Already a configured base learner
+        Base=default_tree_learner,
         Dist=Normal,
         random_state=44
     ))

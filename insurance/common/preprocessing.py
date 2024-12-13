@@ -15,9 +15,9 @@ def create_preprocessor(numerical_features, categorical_features, n_jobs=-1):
         ('scaler', StandardScaler())
     ])
     
-    # Categorical features pipeline
+    # Categorical features pipeline - using -1 as fill value since categories are encoded as non-negative integers
     categorical_transformer = Pipeline(steps=[
-        ('imputer', SimpleImputer(strategy='constant', fill_value='missing')),
+        ('imputer', SimpleImputer(strategy='constant', fill_value=-1)),
         ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
     ])
     

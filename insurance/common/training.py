@@ -7,6 +7,14 @@ from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.linear_model import Ridge
 import torch
 from joblib import parallel_backend
+import os
+import hashlib
+
+from ..models.lgbm_model import MODEL_VERSION as LGBM_VERSION
+from ..models.xgb_model import MODEL_VERSION as XGB_VERSION
+from ..models.catboost_model import MODEL_VERSION as CATBOOST_VERSION
+from ..models.deep_models import MODEL_VERSION as DEEP_VERSION
+from ..models.sklearn_models import MODEL_VERSION as SKLEARN_VERSION
 
 from ..models import (
     create_lgbm_models,
@@ -20,6 +28,51 @@ from ..models import (
 from .preprocessing import create_preprocessor
 from .utils import rmsle
 from .logging import ModelLogger
+
+# Map model names to their versions
+MODEL_VERSIONS = {
+    'lgbm': LGBM_VERSION,
+    'xgb': XGB_VERSION,
+    'catboost': CATBOOST_VERSION,
+    'tabnet': DEEP_VERSION,
+    'ngboost': DEEP_VERSION,
+    'hist_gradient': SKLEARN_VERSION,
+    'extra_trees': SKLEARN_VERSION
+}
+
+def compute_data_hash(X, y):
+    """Compute a hash of the input data to detect changes."""
+    data_str = pd.util.hash_pandas_object(X).sum().hex() + pd.util.hash_pandas_object(y).sum().hex()
+    return hashlib.md5(data_str.encode()).hexdigest()
+
+def load_model_predictions(model_name, data_hash, fold=None):
+    """Load model predictions from disk if they exist and version matches."""
+    base_path = 'insurance/output/models'
+    if fold is not None:
+        path = f'{base_path}/{model_name}_fold{fold}_{data_hash}.joblib'
+    else:
+        path = f'{base_path}/{model_name}_{data_hash}.joblib'
+    
+    if os.path.exists(path):
+        cached = joblib.load(path)
+        # Check if cached predictions were made with same model version
+        if cached.get('version') == MODEL_VERSIONS.get(model_name):
+            return cached
+    return None
+
+def save_model_predictions(predictions, model_name, data_hash, fold=None):
+    """Save model predictions to disk with version information."""
+    base_path = 'insurance/output/models'
+    os.makedirs(base_path, exist_ok=True)
+    
+    if fold is not None:
+        path = f'{base_path}/{model_name}_fold{fold}_{data_hash}.joblib'
+    else:
+        path = f'{base_path}/{model_name}_{data_hash}.joblib'
+    
+    # Add version information
+    predictions['version'] = MODEL_VERSIONS.get(model_name)
+    joblib.dump(predictions, path)
 
 def train_and_predict(
     X_nan,
@@ -37,6 +90,13 @@ def train_and_predict(
 ):
     """Train models and generate predictions using cross-validation."""
     
+    # Compute data hash
+    data_hash = compute_data_hash(pd.concat([X_nan, X_complete]), y)
+    print(f"Data hash: {data_hash}")
+    print("\nModel versions:")
+    for name, version in MODEL_VERSIONS.items():
+        print(f"{name}: {version}")
+    
     # Initialize cross-validation
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
     
@@ -49,7 +109,8 @@ def train_and_predict(
         'catboost': create_catboost_models(n_gpu_threads),
         'ngboost': create_ngboost_models(),
         'hist_gradient': create_hist_gradient_models(),
-        'extra_trees': create_extra_trees_models(n_jobs)
+        'extra_trees': create_extra_trees_models(n_jobs),
+        'xgb': create_xgb_models(n_gpu_threads)
     }
     
     tabnet_models = {
@@ -72,8 +133,19 @@ def train_and_predict(
     
     with parallel_backend('threading', n_jobs=n_jobs):
         # Train models that can handle NaN values
-        for i, (name, model) in enumerate(models.items()):
-            if name in ['lgbm', 'catboost', 'ngboost']:
+        for i, (name, model_list) in enumerate(models.items()):
+            # Check if predictions exist and version matches
+            cached_predictions = load_model_predictions(name, data_hash)
+            if cached_predictions is not None:
+                print(f"\nLoading cached predictions for {name} (version {MODEL_VERSIONS[name]})...")
+                oof_predictions[name] = cached_predictions['oof']
+                test_predictions[name] = cached_predictions['test']
+                model_weights[name] = cached_predictions['weight']
+                meta_features[:, i] = oof_predictions[name]
+                meta_test[:, i] = test_predictions[name]
+                continue
+            
+            if name in ['lgbm', 'catboost', 'ngboost', 'xgb']:
                 X = X_nan
                 test_features = test_nan
                 preprocessor = preprocessor_nan
@@ -82,13 +154,22 @@ def train_and_predict(
                 test_features = test_complete
                 preprocessor = preprocessor_complete
             
-            print(f"\nTraining {name}...")
+            print(f"\nTraining {name} (version {MODEL_VERSIONS[name]})...")
             oof_pred = np.zeros(len(X))
             test_pred = np.zeros(len(test_features))
             fold_scores = []
             feature_imps = None
             
             for fold, (train_idx, val_idx) in enumerate(kf.split(X), 1):
+                # Check if fold predictions exist and version matches
+                fold_predictions = load_model_predictions(name, data_hash, fold)
+                if fold_predictions is not None:
+                    print(f"Loading cached predictions for {name} fold {fold}...")
+                    oof_pred[val_idx] = fold_predictions['oof']
+                    test_pred += fold_predictions['test'] / n_splits
+                    fold_scores.append(fold_predictions['score'])
+                    continue
+                
                 print(f"Fold {fold}/{n_splits}")
                 
                 X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
@@ -103,7 +184,7 @@ def train_and_predict(
                 X_val_processed = preprocessor.transform(X_val)
                 
                 # Model-specific feature selection
-                if 'lgb' in name or 'cat' in name:
+                if 'lgb' in name or 'cat' in name or 'xgb' in name:
                     selector = lgb.LGBMRegressor(
                         n_estimators=100,
                         learning_rate=0.05,
@@ -149,10 +230,14 @@ def train_and_predict(
                 X_val_selected = X_val_processed[:, selected_features]
                 
                 # Train model
-                model.fit(X_train_selected, y_train_log)
+                for model in model_list:
+                    model.fit(X_train_selected, y_train_log)
                 
                 # Generate predictions
-                fold_pred = np.expm1(model.predict(X_val_selected))
+                fold_pred = np.mean([
+                    np.expm1(model.predict(X_val_selected))
+                    for model in model_list
+                ], axis=0)
                 oof_pred[val_idx] = fold_pred
                 
                 # Calculate fold score
@@ -162,7 +247,18 @@ def train_and_predict(
                 # Generate test predictions
                 test_processed = preprocessor.transform(test_features)
                 test_selected = test_processed[:, selected_features]
-                test_pred += np.expm1(model.predict(test_selected)) / n_splits
+                fold_test_pred = np.mean([
+                    np.expm1(model.predict(test_selected))
+                    for model in model_list
+                ], axis=0)
+                test_pred += fold_test_pred / n_splits
+                
+                # Save fold predictions
+                save_model_predictions({
+                    'oof': fold_pred,
+                    'test': fold_test_pred,
+                    'score': fold_score
+                }, name, data_hash, fold)
             
             # Store predictions
             oof_predictions[name] = np.maximum(oof_pred, 0)
@@ -181,15 +277,42 @@ def train_and_predict(
             logger.log_model_weight(name, model_weights[name])
             
             print(f"{name} RMSLE: {model_score:.4f}")
+            
+            # Save model predictions
+            save_model_predictions({
+                'oof': oof_predictions[name],
+                'test': test_predictions[name],
+                'weight': model_weights[name]
+            }, name, data_hash)
         
         # Train TabNet models
-        for i, (name, model) in enumerate(tabnet_models.items(), start=len(models)):
-            print(f"\nTraining {name}...")
+        for i, (name, model_list) in enumerate(tabnet_models.items(), start=len(models)):
+            # Check if predictions exist and version matches
+            cached_predictions = load_model_predictions(name, data_hash)
+            if cached_predictions is not None:
+                print(f"\nLoading cached predictions for {name} (version {MODEL_VERSIONS[name]})...")
+                oof_predictions[name] = cached_predictions['oof']
+                test_predictions[name] = cached_predictions['test']
+                model_weights[name] = cached_predictions['weight']
+                meta_features[:, i] = oof_predictions[name]
+                meta_test[:, i] = test_predictions[name]
+                continue
+            
+            print(f"\nTraining {name} (version {MODEL_VERSIONS[name]})...")
             oof_pred = np.zeros(len(X_complete))
             test_pred = np.zeros(len(test_complete))
             fold_scores = []
             
             for fold, (train_idx, val_idx) in enumerate(kf.split(X_complete), 1):
+                # Check if fold predictions exist and version matches
+                fold_predictions = load_model_predictions(name, data_hash, fold)
+                if fold_predictions is not None:
+                    print(f"Loading cached predictions for {name} fold {fold}...")
+                    oof_pred[val_idx] = fold_predictions['oof']
+                    test_pred += fold_predictions['test'] / n_splits
+                    fold_scores.append(fold_predictions['score'])
+                    continue
+                
                 print(f"Fold {fold}/{n_splits}")
                 
                 X_train, X_val = X_complete.iloc[train_idx], X_complete.iloc[val_idx]
@@ -213,16 +336,20 @@ def train_and_predict(
                 X_val_tensor = torch.FloatTensor(X_val_scaled)
                 
                 # Train TabNet
-                model.fit(
-                    X_train_tensor, y_train_tensor,
-                    eval_set=[(X_val_tensor, torch.FloatTensor(np.log1p(y_val.values)))],
-                    patience=5,
-                    max_epochs=200,
-                    eval_metric=['rmse']
-                )
+                for model in model_list:
+                    model.fit(
+                        X_train_tensor, y_train_tensor,
+                        eval_set=[(X_val_tensor, torch.FloatTensor(np.log1p(y_val.values)))],
+                        patience=5,
+                        max_epochs=200,
+                        eval_metric=['rmse']
+                    )
                 
                 # Generate predictions
-                fold_pred = np.expm1(model.predict(X_val_tensor).numpy())
+                fold_pred = np.mean([
+                    np.expm1(model.predict(X_val_tensor).numpy())
+                    for model in model_list
+                ], axis=0)
                 oof_pred[val_idx] = fold_pred
                 
                 # Calculate fold score
@@ -233,7 +360,18 @@ def train_and_predict(
                 test_processed = preprocessor_complete.transform(test_complete)
                 test_scaled = scaler.transform(test_processed)
                 test_tensor = torch.FloatTensor(test_scaled)
-                test_pred += np.expm1(model.predict(test_tensor).numpy()) / n_splits
+                fold_test_pred = np.mean([
+                    np.expm1(model.predict(test_tensor).numpy())
+                    for model in model_list
+                ], axis=0)
+                test_pred += fold_test_pred / n_splits
+                
+                # Save fold predictions
+                save_model_predictions({
+                    'oof': fold_pred,
+                    'test': fold_test_pred,
+                    'score': fold_score
+                }, name, data_hash, fold)
             
             # Store predictions
             oof_predictions[name] = np.maximum(oof_pred, 0)
@@ -252,6 +390,13 @@ def train_and_predict(
             logger.log_model_weight(name, model_weights[name])
             
             print(f"{name} RMSLE: {model_score:.4f}")
+            
+            # Save model predictions
+            save_model_predictions({
+                'oof': oof_predictions[name],
+                'test': test_predictions[name],
+                'weight': model_weights[name]
+            }, name, data_hash)
     
     # Normalize weights
     total_weight = sum(model_weights.values())

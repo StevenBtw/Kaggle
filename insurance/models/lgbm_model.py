@@ -1,5 +1,8 @@
 import lightgbm as lgb
 
+# Model version - increment when changing model architecture or hyperparameters
+MODEL_VERSION = "1.0"
+
 def create_lgbm_models(n_gpu_threads):
     """Create LightGBM models with different configurations."""
     models = {
