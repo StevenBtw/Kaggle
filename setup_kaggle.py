@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import shutil
 
 def setup_kaggle_credentials():
     """Setup Kaggle API credentials."""
@@ -14,8 +15,11 @@ def setup_kaggle_credentials():
         target_path = os.path.join(kaggle_dir, 'kaggle.json')
         if not os.path.exists(target_path):
             print(f"Moving {root_token} to {target_path}")
-            os.rename(root_token, target_path)
+            # Use shutil.copy2 instead of os.rename for cross-device operations
+            shutil.copy2(root_token, target_path)
             os.chmod(target_path, 0o600)
+            # Remove the original file after successful copy
+            os.remove(root_token)
             print("Kaggle credentials set up successfully")
         else:
             print("Kaggle credentials already exist in ~/.kaggle/")
