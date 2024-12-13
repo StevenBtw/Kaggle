@@ -9,6 +9,7 @@ import torch
 from joblib import parallel_backend
 import os
 import hashlib
+import json
 
 from ..models.lgbm_model import MODEL_VERSION as LGBM_VERSION
 from ..models.xgb_model import MODEL_VERSION as XGB_VERSION
@@ -42,7 +43,10 @@ MODEL_VERSIONS = {
 
 def compute_data_hash(X, y):
     """Compute a hash of the input data to detect changes."""
-    data_str = pd.util.hash_pandas_object(X).sum().hex() + pd.util.hash_pandas_object(y).sum().hex()
+    # Convert pandas objects to string representation
+    x_hash = str(pd.util.hash_pandas_object(X).values.sum())
+    y_hash = str(pd.util.hash_pandas_object(y).values.sum())
+    data_str = x_hash + y_hash
     return hashlib.md5(data_str.encode()).hexdigest()
 
 def load_model_predictions(model_name, data_hash, fold=None):
