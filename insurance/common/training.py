@@ -216,7 +216,8 @@ def train_and_predict(
                 save_model_predictions({
                     'oof': fold_pred,
                     'test': fold_test_pred,
-                    'score': fold_score
+                    'score': fold_score,
+                    'version': MODEL_VERSIONS[name]  # Add version to saved predictions
                 }, name, data_hash, fold)
             
             # Store predictions
@@ -241,7 +242,8 @@ def train_and_predict(
             save_model_predictions({
                 'oof': oof_predictions[name],
                 'test': test_predictions[name],
-                'weight': model_weights[name]
+                'weight': model_weights[name],
+                'version': MODEL_VERSIONS[name]  # Add version to saved predictions
             }, name, data_hash)
         
         # Train TabNet models
@@ -328,7 +330,8 @@ def train_and_predict(
                 save_model_predictions({
                     'oof': fold_pred,
                     'test': fold_test_pred,
-                    'score': fold_score
+                    'score': fold_score,
+                    'version': MODEL_VERSIONS[name]  # Add version to saved predictions
                 }, name, data_hash, fold)
             
             # Store predictions
@@ -353,7 +356,8 @@ def train_and_predict(
             save_model_predictions({
                 'oof': oof_predictions[name],
                 'test': test_predictions[name],
-                'weight': model_weights[name]
+                'weight': model_weights[name],
+                'version': MODEL_VERSIONS[name]  # Add version to saved predictions
             }, name, data_hash)
     
     # Normalize weights

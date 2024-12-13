@@ -36,6 +36,12 @@ def load_features(name, subset='train'):
         return pd.read_parquet(path)
     return None
 
+def save_feature_sets(feature_sets, data_hash):
+    """Save feature sets to cache."""
+    os.makedirs('insurance/output/features', exist_ok=True)
+    cache_path = f'insurance/output/features/feature_sets_{data_hash}.joblib'
+    joblib.dump(feature_sets, cache_path)
+
 def save_model_predictions(predictions, model_name, data_hash, fold=None):
     """Save model predictions to disk."""
     os.makedirs('insurance/output/models', exist_ok=True)
@@ -63,12 +69,6 @@ def load_model_predictions(model_name, data_hash, fold=None):
             # If there's an error loading the file, return None
             return None
     return None
-
-def save_feature_sets(feature_sets, data_hash):
-    """Save feature sets to cache."""
-    os.makedirs('insurance/output/features', exist_ok=True)
-    cache_path = f'insurance/output/features/feature_sets_{data_hash}.joblib'
-    joblib.dump(feature_sets, cache_path)
 
 def create_or_load_features(name, create_fn, *args, **kwargs):
     """Create features or load from disk if they exist."""
@@ -107,7 +107,7 @@ def create_interactions(df_train, df_test, features, degree=3, handle_nan=False)
 
 def create_statistical_features(df_train, df_test, base_features, handle_nan=False):
     """Create statistical aggregation features."""
-    def process_df(df):
+    def process_df(df, is_train=True):
         if handle_nan:
             df_calc = df.copy()
         else:
@@ -123,8 +123,9 @@ def create_statistical_features(df_train, df_test, base_features, handle_nan=Fal
                 if f1 != f2:
                     stats[f'{f1}_div_{f2}'] = df_calc[f1] / (df_calc[f2] + 1e-6)
         
-        # Rolling statistics
+        # Rolling statistics - only for numeric features that are not the target
         numeric_cols = df_calc.select_dtypes(include=[np.number]).columns
+        numeric_cols = [col for col in numeric_cols if col != 'Premium Amount']
         for col in numeric_cols:
             stats[f'{col}_rolling_mean'] = df_calc[col].rolling(window=2, min_periods=1).mean()
             stats[f'{col}_rolling_std'] = df_calc[col].rolling(window=2, min_periods=1).std()
@@ -234,11 +235,11 @@ def create_polynomial_features(df_train, df_test, features, degree=3, handle_nan
                 data = pd.DataFrame(imputer.fit_transform(data), columns=features)
             else:
                 data = pd.DataFrame(imputer.transform(data), columns=features)
-        else:
-            # For models that can handle NaN, we still need to fill NaN for polynomial features
-            # but we'll mark the locations to restore them later
-            mask = data.isna()
-            data = data.fillna(data.median())
+        
+        # For models that can handle NaN, we still need to fill NaN for polynomial features
+        # but we'll mark the locations to restore them later
+        mask = data.isna()
+        data = data.fillna(data.median())
         
         if fit:
             poly_features = poly.fit_transform(data)
