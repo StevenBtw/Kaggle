@@ -43,8 +43,8 @@ def main():
     test_data = pd.read_csv('insurance/data/test.csv')
     
     print("\nData columns:")
-    print("Train columns:", train_data.columns.tolist())
-    print("Test columns:", test_data.columns.tolist())
+    print("Train columns:", train_data.columns.values)
+    print("Test columns:", test_data.columns.values)
     
     log_step(run_log, "Engineering features")
     print("\nEngineering features...")

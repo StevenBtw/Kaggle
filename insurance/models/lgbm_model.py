@@ -3,74 +3,56 @@ import lightgbm as lgb
 # Model version - increment when changing model architecture or hyperparameters
 MODEL_VERSION = "1.0"
 
-def create_lgbm_models(n_gpu_threads):
-    """Create LightGBM models with different configurations."""
-    models = {
-        'lgb1': lgb.LGBMRegressor(
-            n_estimators=6000,
-            learning_rate=0.002,
-            num_leaves=31,
-            max_depth=8,
-            min_child_samples=20,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            reg_alpha=0.1,
-            reg_lambda=0.1,
-            random_state=42,
-            device='gpu',
-            gpu_platform_id=0,
-            gpu_device_id=0,
-            n_jobs=n_gpu_threads,
-            verbose=-1
-        ),
-        'lgb2': lgb.LGBMRegressor(
-            n_estimators=6000,
-            learning_rate=0.002,
-            num_leaves=127,
-            max_depth=12,
-            min_child_samples=10,
-            subsample=0.7,
-            colsample_bytree=0.7,
-            reg_alpha=0.2,
-            reg_lambda=0.2,
-            random_state=43,
-            device='gpu',
-            gpu_platform_id=0,
-            gpu_device_id=0,
-            n_jobs=n_gpu_threads,
-            verbose=-1
-        ),
-        'lgb3': lgb.LGBMRegressor(
-            n_estimators=6000,
-            learning_rate=0.002,
-            num_leaves=63,
-            max_depth=10,
-            min_child_samples=15,
-            subsample=0.75,
-            colsample_bytree=0.75,
-            reg_alpha=0.15,
-            reg_lambda=0.15,
-            random_state=44,
-            device='gpu',
-            gpu_platform_id=0,
-            gpu_device_id=0,
-            n_jobs=n_gpu_threads,
-            verbose=-1
-        )
-    }
-    return models
-
-def create_meta_model():
-    """Create meta model for stacking."""
-    return lgb.LGBMRegressor(
-        n_estimators=3000,
-        learning_rate=0.005,
+def create_lgbm_models(n_jobs=-1):
+    """Create LightGBM models with different hyperparameters."""
+    models = []
+    
+    # Base model
+    models.append(lgb.LGBMRegressor(
+        n_estimators=1000,
+        learning_rate=0.03,
         num_leaves=31,
         max_depth=6,
+        min_child_samples=20,
         subsample=0.8,
         colsample_bytree=0.8,
         reg_alpha=0.1,
-        reg_lambda=0.1,
+        reg_lambda=1.0,
         random_state=42,
+        n_jobs=n_jobs,
         device='gpu'
-    )
+    ))
+    
+    # Deeper model
+    models.append(lgb.LGBMRegressor(
+        n_estimators=1000,
+        learning_rate=0.02,
+        num_leaves=63,
+        max_depth=8,
+        min_child_samples=30,
+        subsample=0.7,
+        colsample_bytree=0.7,
+        reg_alpha=0.2,
+        reg_lambda=1.5,
+        random_state=43,
+        n_jobs=n_jobs,
+        device='gpu'
+    ))
+    
+    # More regularized model
+    models.append(lgb.LGBMRegressor(
+        n_estimators=1000,
+        learning_rate=0.02,
+        num_leaves=31,
+        max_depth=6,
+        min_child_samples=40,
+        subsample=0.6,
+        colsample_bytree=0.6,
+        reg_alpha=0.5,
+        reg_lambda=2.0,
+        random_state=44,
+        n_jobs=n_jobs,
+        device='gpu'
+    ))
+    
+    return models
