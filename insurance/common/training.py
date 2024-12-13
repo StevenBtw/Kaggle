@@ -1,34 +1,27 @@
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import KFold
-import joblib
-import lightgbm as lgb
 from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.linear_model import Ridge
+import lightgbm as lgb
 import torch
 from joblib import parallel_backend
-import os
-import hashlib
-import json
 
-from ..models.lgbm_model import MODEL_VERSION as LGBM_VERSION
-from ..models.xgb_model import MODEL_VERSION as XGB_VERSION
-from ..models.catboost_model import MODEL_VERSION as CATBOOST_VERSION
-from ..models.deep_models import MODEL_VERSION as DEEP_VERSION
-from ..models.sklearn_models import MODEL_VERSION as SKLEARN_VERSION
-
-from ..models import (
-    create_lgbm_models,
-    create_xgb_models,
-    create_catboost_models,
+from ..models.lgbm_model import create_lgbm_models, MODEL_VERSION as LGBM_VERSION
+from ..models.xgb_model import create_xgb_models, MODEL_VERSION as XGB_VERSION
+from ..models.catboost_model import create_catboost_models, MODEL_VERSION as CATBOOST_VERSION
+from ..models.deep_models import create_tabnet_models, MODEL_VERSION as DEEP_VERSION
+from ..models.sklearn_models import (
     create_hist_gradient_models,
     create_extra_trees_models,
-    create_tabnet_models,
-    create_ngboost_models
+    MODEL_VERSION as SKLEARN_VERSION
 )
+from ..models.deep_models import create_ngboost_models
+
 from .preprocessing import create_preprocessor
-from .utils import rmsle
+from .utils import rmsle, compute_input_hash
 from .logging import ModelLogger
+from .feature_engineering import save_model_predictions, load_model_predictions
 
 # Map model names to their versions
 MODEL_VERSIONS = {
@@ -40,43 +33,6 @@ MODEL_VERSIONS = {
     'hist_gradient': SKLEARN_VERSION,
     'extra_trees': SKLEARN_VERSION
 }
-
-def compute_data_hash(X, y):
-    """Compute a hash of the input data to detect changes."""
-    # Convert pandas objects to string representation
-    x_hash = str(pd.util.hash_pandas_object(X).values.sum())
-    y_hash = str(pd.util.hash_pandas_object(y).values.sum())
-    data_str = x_hash + y_hash
-    return hashlib.md5(data_str.encode()).hexdigest()
-
-def load_model_predictions(model_name, data_hash, fold=None):
-    """Load model predictions from disk if they exist and version matches."""
-    base_path = 'insurance/output/models'
-    if fold is not None:
-        path = f'{base_path}/{model_name}_fold{fold}_{data_hash}.joblib'
-    else:
-        path = f'{base_path}/{model_name}_{data_hash}.joblib'
-    
-    if os.path.exists(path):
-        cached = joblib.load(path)
-        # Check if cached predictions were made with same model version
-        if cached.get('version') == MODEL_VERSIONS.get(model_name):
-            return cached
-    return None
-
-def save_model_predictions(predictions, model_name, data_hash, fold=None):
-    """Save model predictions to disk with version information."""
-    base_path = 'insurance/output/models'
-    os.makedirs(base_path, exist_ok=True)
-    
-    if fold is not None:
-        path = f'{base_path}/{model_name}_fold{fold}_{data_hash}.joblib'
-    else:
-        path = f'{base_path}/{model_name}_{data_hash}.joblib'
-    
-    # Add version information
-    predictions['version'] = MODEL_VERSIONS.get(model_name)
-    joblib.dump(predictions, path)
 
 def train_and_predict(
     X_nan,
@@ -95,7 +51,7 @@ def train_and_predict(
     """Train models and generate predictions using cross-validation."""
     
     # Compute data hash
-    data_hash = compute_data_hash(pd.concat([X_nan, X_complete]), y)
+    data_hash = compute_input_hash(pd.concat([X_nan, X_complete]), y)
     print(f"Data hash: {data_hash}")
     print("\nModel versions:")
     for name, version in MODEL_VERSIONS.items():
@@ -233,15 +189,14 @@ def train_and_predict(
                 X_train_selected = X_train_processed[:, selected_features]
                 X_val_selected = X_val_processed[:, selected_features]
                 
-                # Train model
+                # Train models
+                fold_preds = []
                 for model in model_list:
                     model.fit(X_train_selected, y_train_log)
+                    fold_preds.append(np.expm1(model.predict(X_val_selected)))
                 
-                # Generate predictions
-                fold_pred = np.mean([
-                    np.expm1(model.predict(X_val_selected))
-                    for model in model_list
-                ], axis=0)
+                # Average predictions from all models in the list
+                fold_pred = np.mean(fold_preds, axis=0)
                 oof_pred[val_idx] = fold_pred
                 
                 # Calculate fold score
@@ -251,10 +206,10 @@ def train_and_predict(
                 # Generate test predictions
                 test_processed = preprocessor.transform(test_features)
                 test_selected = test_processed[:, selected_features]
-                fold_test_pred = np.mean([
-                    np.expm1(model.predict(test_selected))
-                    for model in model_list
-                ], axis=0)
+                fold_test_preds = []
+                for model in model_list:
+                    fold_test_preds.append(np.expm1(model.predict(test_selected)))
+                fold_test_pred = np.mean(fold_test_preds, axis=0)
                 test_pred += fold_test_pred / n_splits
                 
                 # Save fold predictions
@@ -339,7 +294,8 @@ def train_and_predict(
                 y_train_tensor = torch.FloatTensor(y_train_log.values)
                 X_val_tensor = torch.FloatTensor(X_val_scaled)
                 
-                # Train TabNet
+                # Train TabNet models
+                fold_preds = []
                 for model in model_list:
                     model.fit(
                         X_train_tensor, y_train_tensor,
@@ -348,12 +304,10 @@ def train_and_predict(
                         max_epochs=200,
                         eval_metric=['rmse']
                     )
+                    fold_preds.append(np.expm1(model.predict(X_val_tensor).numpy()))
                 
-                # Generate predictions
-                fold_pred = np.mean([
-                    np.expm1(model.predict(X_val_tensor).numpy())
-                    for model in model_list
-                ], axis=0)
+                # Average predictions from all models in the list
+                fold_pred = np.mean(fold_preds, axis=0)
                 oof_pred[val_idx] = fold_pred
                 
                 # Calculate fold score
@@ -364,10 +318,10 @@ def train_and_predict(
                 test_processed = preprocessor_complete.transform(test_complete)
                 test_scaled = scaler.transform(test_processed)
                 test_tensor = torch.FloatTensor(test_scaled)
-                fold_test_pred = np.mean([
-                    np.expm1(model.predict(test_tensor).numpy())
-                    for model in model_list
-                ], axis=0)
+                fold_test_preds = []
+                for model in model_list:
+                    fold_test_preds.append(np.expm1(model.predict(test_tensor).numpy()))
+                fold_test_pred = np.mean(fold_test_preds, axis=0)
                 test_pred += fold_test_pred / n_splits
                 
                 # Save fold predictions
