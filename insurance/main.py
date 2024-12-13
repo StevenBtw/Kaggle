@@ -47,7 +47,7 @@ def main():
         'id': test_data['id'],
         'target': test_predictions['ensemble']
     })
-    submission.to_csv('insurance/submission.csv', index=False)
+    submission.to_csv('insurance/output/submission.csv', index=False)
     print("Predictions saved to submission.csv")
     
     # Print final validation scores
