@@ -120,12 +120,12 @@ def create_statistical_features(df_train, df_test, base_features, handle_nan=Fal
         # Mean ratios
         for f1 in base_features:
             for f2 in base_features:
-                if f1 != f2:
+                if f1 != f2 and 'Premium Amount' not in (f1, f2):  # Skip target variable
                     stats[f'{f1}_div_{f2}'] = df_calc[f1] / (df_calc[f2] + 1e-6)
         
         # Rolling statistics - only for numeric features that are not the target
         numeric_cols = df_calc.select_dtypes(include=[np.number]).columns
-        numeric_cols = [col for col in numeric_cols if col != 'Premium Amount']
+        numeric_cols = [col for col in numeric_cols if col in base_features and col != 'Premium Amount']
         for col in numeric_cols:
             stats[f'{col}_rolling_mean'] = df_calc[col].rolling(window=2, min_periods=1).mean()
             stats[f'{col}_rolling_std'] = df_calc[col].rolling(window=2, min_periods=1).std()

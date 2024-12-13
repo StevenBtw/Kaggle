@@ -88,6 +88,13 @@ def train_and_predict(
     preprocessor_nan = create_preprocessor(numerical_features_nan, categorical_features, n_jobs)
     preprocessor_complete = create_preprocessor(numerical_features_complete, categorical_features, n_jobs)
     
+    # Preprocess test data once
+    if len(test_nan) > 0:
+        preprocessor_nan.fit(X_nan)
+        test_nan_processed = preprocessor_nan.transform(test_nan)
+        preprocessor_complete.fit(X_complete)
+        test_complete_processed = preprocessor_complete.transform(test_complete)
+    
     # Standard scaler for TabNet
     scaler = StandardScaler()
     
@@ -108,10 +115,12 @@ def train_and_predict(
             if name in ['lgbm', 'catboost', 'ngboost', 'xgb']:
                 X = X_nan
                 test_features = test_nan
+                test_processed = test_nan_processed
                 preprocessor = preprocessor_nan
             else:
                 X = X_complete
                 test_features = test_complete
+                test_processed = test_complete_processed
                 preprocessor = preprocessor_complete
             
             print(f"\nTraining {name} (version {MODEL_VERSIONS[name]})...")
@@ -119,6 +128,52 @@ def train_and_predict(
             test_pred = np.zeros(len(test_features))
             fold_scores = []
             feature_imps = None
+            
+            # Initial feature selection on full training data
+            preprocessor.fit(X)
+            X_processed = preprocessor.transform(X)
+            
+            # Model-specific feature selection
+            if 'lgb' in name or 'cat' in name or 'xgb' in name:
+                selector = lgb.LGBMRegressor(
+                    n_estimators=100,
+                    learning_rate=0.05,
+                    num_leaves=31,
+                    random_state=42,
+                    device='gpu'
+                )
+            elif 'ngb' in name:
+                selector = lgb.LGBMRegressor(
+                    n_estimators=100,
+                    learning_rate=0.05,
+                    num_leaves=63,
+                    random_state=42,
+                    device='gpu'
+                )
+            else:
+                selector = lgb.LGBMRegressor(
+                    n_estimators=100,
+                    learning_rate=0.05,
+                    num_leaves=15,
+                    max_depth=5,
+                    random_state=42,
+                    device='gpu'
+                )
+            
+            # Fit selector on full training data
+            selector.fit(X_processed, np.log1p(y))
+            
+            # Get feature importances and select top features
+            importances = selector.feature_importances_
+            if 'hist' in name or 'et' in name:
+                importance_threshold = np.percentile(importances, 30)
+            else:
+                importance_threshold = np.percentile(importances, 20)
+            
+            selected_features = importances >= importance_threshold
+            
+            # Store feature importances
+            feature_imps = importances
             
             for fold, (train_idx, val_idx) in enumerate(kf.split(X), 1):
                 # Check if fold predictions exist and version matches
@@ -143,49 +198,7 @@ def train_and_predict(
                 X_train_processed = preprocessor.transform(X_train)
                 X_val_processed = preprocessor.transform(X_val)
                 
-                # Model-specific feature selection
-                if 'lgb' in name or 'cat' in name or 'xgb' in name:
-                    selector = lgb.LGBMRegressor(
-                        n_estimators=100,
-                        learning_rate=0.05,
-                        num_leaves=31,
-                        random_state=42,
-                        device='gpu'
-                    )
-                elif 'ngb' in name:
-                    selector = lgb.LGBMRegressor(
-                        n_estimators=100,
-                        learning_rate=0.05,
-                        num_leaves=63,
-                        random_state=42,
-                        device='gpu'
-                    )
-                else:
-                    selector = lgb.LGBMRegressor(
-                        n_estimators=100,
-                        learning_rate=0.05,
-                        num_leaves=15,
-                        max_depth=5,
-                        random_state=42,
-                        device='gpu'
-                    )
-                
-                selector.fit(X_train_processed, y_train_log)
-                
-                # Store feature importances (only from first fold)
-                if fold == 1:
-                    feature_imps = selector.feature_importances_
-                
-                # Get feature importances and select top features
-                importances = selector.feature_importances_
-                if 'hist' in name or 'et' in name:
-                    importance_threshold = np.percentile(importances, 30)
-                else:
-                    importance_threshold = np.percentile(importances, 20)
-                
-                selected_features = importances >= importance_threshold
-                
-                # Select features
+                # Select features using the same features selected on full data
                 X_train_selected = X_train_processed[:, selected_features]
                 X_val_selected = X_val_processed[:, selected_features]
                 
@@ -203,8 +216,7 @@ def train_and_predict(
                 fold_score = rmsle(y_val, fold_pred)
                 fold_scores.append(fold_score)
                 
-                # Generate test predictions
-                test_processed = preprocessor.transform(test_features)
+                # Generate test predictions using the same selected features
                 test_selected = test_processed[:, selected_features]
                 fold_test_preds = []
                 for model in model_list:
