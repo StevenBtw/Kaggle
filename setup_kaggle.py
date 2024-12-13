@@ -39,8 +39,8 @@ def install_kaggle():
 
 def main():
     print("Setting up Kaggle CLI...")
-    setup_kaggle_credentials()  # Move credentials first
-    install_kaggle()           # Then install/import kaggle
+    setup_kaggle_credentials()
+    install_kaggle()
     print("Kaggle setup complete!")
 
 if __name__ == "__main__":
