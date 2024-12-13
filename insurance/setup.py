@@ -16,5 +16,5 @@ setup(
         "ngboost>=0.3.12",
         "torch>=1.9.0",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.10",
 )
